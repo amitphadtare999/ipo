@@ -274,7 +274,7 @@ export default function IpoListPage() {
       width: 72,
       resizable: false,
       renderCell: ({ row: ipo }) => (
-        <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center justify-end gap-0.5">
           <Button
             variant="ghost"
             size="icon"
@@ -311,7 +311,7 @@ export default function IpoListPage() {
     <div className="space-y-6">
       {/* Toolbar: search + add */}
       <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-xs">
+        <div className="relative w-64">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search IPOs…"
@@ -320,7 +320,7 @@ export default function IpoListPage() {
             className="pl-9"
           />
         </div>
-        <Button onClick={openAddDialog} className="gap-2 shrink-0">
+        <Button onClick={openAddDialog} className="gap-2 ml-auto shrink-0">
           <Plus className="h-4 w-4" />
           Add IPO
         </Button>

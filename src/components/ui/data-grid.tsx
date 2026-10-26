@@ -1,12 +1,20 @@
 import { useMemo, useState } from "react";
 import {
   DataGrid as RDataGrid,
+  SelectColumn as RSelectColumn,
   type Column,
   type SortColumn,
 } from "react-data-grid";
 import { cn } from "@/lib/utils";
 
 export type { Column, SortColumn };
+
+/** Checkbox column for row selection — prepend to your columns array. */
+export const selectColumn: Column<any, any> = {
+  ...RSelectColumn,
+  cellClass: "app-data-grid-select",
+  headerCellClass: "app-data-grid-select",
+};
 
 export type SortComparator<R> = (a: R, b: R) => number;
 
@@ -23,6 +31,9 @@ interface DataGridProps<R> {
   className?: string;
   /** Initial sort, e.g. [{ columnKey: "close_date", direction: "DESC" }] */
   defaultSort?: readonly SortColumn[];
+  /** Keys of the selected rows — pass together with onSelectedRowsChange and selectColumn */
+  selectedRows?: ReadonlySet<string>;
+  onSelectedRowsChange?: (selectedRows: Set<string>) => void;
 }
 
 /**
@@ -41,6 +52,8 @@ export function DataGrid<R>({
   maxHeight = 640,
   className,
   defaultSort = [],
+  selectedRows,
+  onSelectedRowsChange,
 }: DataGridProps<R>) {
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>(defaultSort);
 
@@ -76,7 +89,9 @@ export function DataGrid<R>({
       style={{ blockSize: height }}
       columns={gridColumns}
       rows={sortedRows}
-      rowKeyGetter={rowKeyGetter}
+      rowKeyGetter={rowKeyGetter as (row: R) => string}
+      selectedRows={selectedRows}
+      onSelectedRowsChange={onSelectedRowsChange}
       rowHeight={rowHeight}
       headerRowHeight={headerRowHeight}
       rowClass={() => "group"}

@@ -178,3 +178,7 @@
 .app-data-grid [role="row"]:last-child [role="gridcell"] {
   border-block-end: none;
 }
+.app-data-grid .app-data-grid-select {
+  padding-inline: 0;
+  justify-content: center;
+}

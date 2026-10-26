@@ -6,11 +6,12 @@ import type { Ipo, IpoApplication, DematAccount, ApplicationStatus } from "@/typ
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DataGrid, compareNumber, compareText, type Column } from "@/components/ui/data-grid";
+import { DataGrid, compareNumber, compareText, selectColumn, type Column } from "@/components/ui/data-grid";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ApplicationDialog } from "@/components/applications/ApplicationDialog";
 import {
   ArrowLeft, Plus, Pencil, Trash2, CalendarDays, IndianRupee,
-  BarChart3, TrendingUp, AlertCircle,
+  BarChart3, TrendingUp, AlertCircle, X,
 } from "lucide-react";
 
 const statusConfig: Record<ApplicationStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }> = {
@@ -21,6 +22,12 @@ const statusConfig: Record<ApplicationStatus, { label: string; variant: "default
   listed:       { label: "Listed",       variant: "default" },
   sold:         { label: "Sold",         variant: "secondary" },
 };
+
+/** Statuses that can be set in bulk (legacy ones are display-only) */
+const bulkStatuses: ApplicationStatus[] = ["applied", "payment_done", "allotted", "not_allotted"];
+
+/** Mirrors the dialog: these statuses mean the application was allotted */
+const isAllottedStatus = (s: ApplicationStatus) => ["allotted", "listed", "sold"].includes(s);
 
 const appSortComparators = {
   account: compareText<IpoApplication>((r) => r.demat_account?.name),
@@ -42,6 +49,10 @@ export default function IpoDetailPage() {
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingApp, setEditingApp] = useState<IpoApplication | null>(null);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [bulkStatus, setBulkStatus] = useState<ApplicationStatus>("payment_done");
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const fetchData = async () => {
     if (!id) return;
@@ -53,6 +64,7 @@ export default function IpoDetailPage() {
     if (ipoRes.data) setIpo(ipoRes.data);
     if (appsRes.data) setApplications(appsRes.data as unknown as (IpoApplication & { demat_account: DematAccount })[]);
     if (dematsRes.data) setDematAccounts(dematsRes.data);
+    setSelectedIds(new Set());
     setLoading(false);
   };
 
@@ -68,6 +80,27 @@ export default function IpoDetailPage() {
     setDialogOpen(true);
   };
 
+  const handleBulkStatusUpdate = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setBulkSaving(true);
+    setBulkError(null);
+    const { error } = await supabase
+      .from("ipo_applications")
+      .update({
+        status: bulkStatus,
+        is_allotted: isAllottedStatus(bulkStatus),
+        updated_at: new Date().toISOString(),
+      })
+      .in("id", ids);
+    setBulkSaving(false);
+    if (error) {
+      setBulkError(error.message);
+      return;
+    }
+    await fetchData();
+  };
+
   const handleDeleteApp = async (appId: string) => {
     if (!confirm("Delete this application?")) return;
     await supabase.from("ipo_applications").delete().eq("id", appId);
@@ -77,6 +110,7 @@ export default function IpoDetailPage() {
   const dash = <span className="text-muted-foreground">—</span>;
 
   const appColumns: Column<IpoApplication>[] = [
+    selectColumn as Column<IpoApplication>,
     {
       key: "account",
       name: "Account",
@@ -154,7 +188,7 @@ export default function IpoDetailPage() {
       width: 80,
       resizable: false,
       renderCell: ({ row: app }) => (
-        <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center justify-end gap-0.5">
           <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => openEditDialog(app)}>
             <Pencil className="h-3.5 w-3.5" />
           </Button>
@@ -330,6 +364,35 @@ export default function IpoDetailPage() {
           </div>
         )}
 
+        {selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-accent/40 px-4 py-3">
+            <span className="text-sm font-medium">
+              {selectedIds.size} selected
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Set status to</span>
+              <Select value={bulkStatus} onValueChange={(val) => setBulkStatus(val as ApplicationStatus)}>
+                <SelectTrigger className="h-8 w-[160px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {bulkStatuses.map((s) => (
+                    <SelectItem key={s} value={s}>{statusConfig[s].label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button size="sm" onClick={handleBulkStatusUpdate} disabled={bulkSaving}>
+              {bulkSaving ? "Updating…" : `Update ${selectedIds.size}`}
+            </Button>
+            <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => setSelectedIds(new Set())}>
+              <X className="h-3.5 w-3.5" />
+              Clear
+            </Button>
+            {bulkError && <span className="text-sm text-destructive">{bulkError}</span>}
+          </div>
+        )}
+
         {applications.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center border rounded-xl bg-card">
             <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center mb-3">
@@ -345,6 +408,8 @@ export default function IpoDetailPage() {
               rows={applications}
               rowKeyGetter={(app) => app.id}
               sortComparators={appSortComparators}
+              selectedRows={selectedIds}
+              onSelectedRowsChange={setSelectedIds}
             />
           </div>
         )}
