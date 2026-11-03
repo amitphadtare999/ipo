@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataGrid, compareNumber, compareText, selectColumn, type Column } from "@/components/ui/data-grid";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ApplicationDialog } from "@/components/applications/ApplicationDialog";
 import {
   ArrowLeft, Plus, Pencil, Trash2, CalendarDays, IndianRupee,
@@ -28,6 +30,113 @@ const bulkStatuses: ApplicationStatus[] = ["applied", "payment_done", "allotted"
 
 /** Mirrors the dialog: these statuses mean the application was allotted */
 const isAllottedStatus = (s: ApplicationStatus) => ["allotted", "listed", "sold"].includes(s);
+
+/** A field that can be set on many applications at once */
+interface BulkField {
+  key: string;
+  label: string;
+  type: "select" | "number" | "text";
+  /** options for type "select" */
+  options?: { value: string; label: string }[];
+  min?: string;
+  step?: string;
+  placeholder?: string;
+  /** blank input clears the field (writes null) instead of being rejected */
+  clearable?: boolean;
+  /** Build the DB patch from the raw input. Return null if the input is not usable. */
+  toPatch: (raw: string) => Record<string, unknown> | null;
+}
+
+const asInt = (raw: string) => {
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : null;
+};
+const asFloat = (raw: string) => {
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : null;
+};
+
+const bulkFields: BulkField[] = [
+  {
+    key: "status",
+    label: "Status",
+    type: "select",
+    options: bulkStatuses.map((s) => ({ value: s, label: statusConfig[s].label })),
+    // keep is_allotted in step with status, exactly as the edit dialog does
+    toPatch: (raw) => (raw ? { status: raw, is_allotted: isAllottedStatus(raw as ApplicationStatus) } : null),
+  },
+  {
+    key: "payment_mode",
+    label: "Payment Mode",
+    type: "select",
+    options: [
+      { value: "upi", label: "UPI" },
+      { value: "asba", label: "ASBA" },
+    ],
+    toPatch: (raw) => (raw ? { payment_mode: raw } : null),
+  },
+  {
+    key: "lots_applied",
+    label: "Lots Applied",
+    type: "number",
+    min: "1",
+    step: "1",
+    placeholder: "e.g. 1",
+    toPatch: (raw) => {
+      const n = asInt(raw);
+      return n !== null && n >= 1 ? { lots_applied: n } : null;
+    },
+  },
+  {
+    key: "shares_allotted",
+    label: "Shares Allotted",
+    type: "number",
+    min: "0",
+    step: "1",
+    placeholder: "e.g. 0",
+    toPatch: (raw) => {
+      const n = asInt(raw);
+      return n !== null && n >= 0 ? { shares_allotted: n } : null;
+    },
+  },
+  {
+    key: "avg_selling_price",
+    label: "Avg Selling Price (₹)",
+    type: "number",
+    step: "0.01",
+    placeholder: "blank = clear",
+    clearable: true,
+    toPatch: (raw) => {
+      if (raw.trim() === "") return { avg_selling_price: null };
+      const n = asFloat(raw);
+      return n !== null ? { avg_selling_price: n } : null;
+    },
+  },
+  {
+    key: "profit",
+    label: "Profit / Loss (₹)",
+    type: "number",
+    step: "0.01",
+    placeholder: "blank = clear",
+    clearable: true,
+    toPatch: (raw) => {
+      if (raw.trim() === "") return { profit: null };
+      const n = asFloat(raw);
+      return n !== null ? { profit: n } : null;
+    },
+  },
+  {
+    key: "notes",
+    label: "Notes",
+    type: "text",
+    placeholder: "blank = clear",
+    clearable: true,
+    toPatch: (raw) => ({ notes: raw.trim() === "" ? null : raw }),
+  },
+];
+
+/** Starting value when a field is picked */
+const defaultBulkValue = (f: BulkField) => (f.type === "select" ? f.options?.[0]?.value ?? "" : "");
 
 const appSortComparators = {
   account: compareText<IpoApplication>((r) => r.demat_account?.name),
@@ -50,9 +159,19 @@ export default function IpoDetailPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingApp, setEditingApp] = useState<IpoApplication | null>(null);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [bulkStatus, setBulkStatus] = useState<ApplicationStatus>("payment_done");
+  const [bulkFieldKey, setBulkFieldKey] = useState<string>(bulkFields[0].key);
+  const [bulkValue, setBulkValue] = useState<string>(() => defaultBulkValue(bulkFields[0]));
   const [bulkSaving, setBulkSaving] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+
+  const bulkField = bulkFields.find((f) => f.key === bulkFieldKey) ?? bulkFields[0];
+
+  const pickBulkField = (key: string) => {
+    const field = bulkFields.find((f) => f.key === key) ?? bulkFields[0];
+    setBulkFieldKey(field.key);
+    setBulkValue(defaultBulkValue(field));
+    setBulkError(null);
+  };
 
   const fetchData = async () => {
     if (!id) return;
@@ -80,18 +199,19 @@ export default function IpoDetailPage() {
     setDialogOpen(true);
   };
 
-  const handleBulkStatusUpdate = async () => {
+  const handleBulkUpdate = async () => {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
+    const patch = bulkField.toPatch(bulkValue);
+    if (!patch) {
+      setBulkError(`Enter a valid ${bulkField.label.toLowerCase()}.`);
+      return;
+    }
     setBulkSaving(true);
     setBulkError(null);
     const { error } = await supabase
       .from("ipo_applications")
-      .update({
-        status: bulkStatus,
-        is_allotted: isAllottedStatus(bulkStatus),
-        updated_at: new Date().toISOString(),
-      })
+      .update({ ...patch, updated_at: new Date().toISOString() })
       .in("id", ids);
     setBulkSaving(false);
     if (error) {
@@ -365,31 +485,61 @@ export default function IpoDetailPage() {
         )}
 
         {selectedIds.size > 0 && (
-          <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-accent/40 px-4 py-3">
-            <span className="text-sm font-medium">
-              {selectedIds.size} selected
-            </span>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Set status to</span>
-              <Select value={bulkStatus} onValueChange={(val) => setBulkStatus(val as ApplicationStatus)}>
-                <SelectTrigger className="h-8 w-[160px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {bulkStatuses.map((s) => (
-                    <SelectItem key={s} value={s}>{statusConfig[s].label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <div className="rounded-xl border bg-accent/40 px-4 py-3 space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <span className="text-sm font-medium pb-2">{selectedIds.size} selected</span>
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="bulk_field" className="text-xs text-muted-foreground">Field</Label>
+                <Select value={bulkFieldKey} onValueChange={pickBulkField}>
+                  <SelectTrigger id="bulk_field" className="h-9 w-[190px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {bulkFields.map((f) => (
+                      <SelectItem key={f.key} value={f.key}>{f.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="bulk_value" className="text-xs text-muted-foreground">New value</Label>
+                {bulkField.type === "select" ? (
+                  <Select value={bulkValue} onValueChange={setBulkValue}>
+                    <SelectTrigger id="bulk_value" className="h-9 w-[180px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {bulkField.options?.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    id="bulk_value"
+                    className="h-9 w-[180px]"
+                    type={bulkField.type === "number" ? "number" : "text"}
+                    min={bulkField.min}
+                    step={bulkField.step}
+                    placeholder={bulkField.placeholder}
+                    value={bulkValue}
+                    onChange={(e) => { setBulkValue(e.target.value); setBulkError(null); }}
+                  />
+                )}
+              </div>
+
+              <Button size="sm" className="h-9" onClick={handleBulkUpdate} disabled={bulkSaving}>
+                {bulkSaving ? "Updating…" : `Update ${selectedIds.size}`}
+              </Button>
+              <Button variant="ghost" size="sm" className="h-9 gap-1.5 text-muted-foreground" onClick={() => setSelectedIds(new Set())}>
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </Button>
             </div>
-            <Button size="sm" onClick={handleBulkStatusUpdate} disabled={bulkSaving}>
-              {bulkSaving ? "Updating…" : `Update ${selectedIds.size}`}
-            </Button>
-            <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => setSelectedIds(new Set())}>
-              <X className="h-3.5 w-3.5" />
-              Clear
-            </Button>
-            {bulkError && <span className="text-sm text-destructive">{bulkError}</span>}
+
+            {bulkError && <p className="text-sm text-destructive">{bulkError}</p>}
           </div>
         )}
 
